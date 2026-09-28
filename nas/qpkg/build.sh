@@ -130,6 +130,9 @@ COPIED=0
 for f in "${SRC}"/build/*.qpkg "${SRC}"/build/*.qpkg.*; do
     [ -e "${f}" ] || continue
     cp "${f}" "${OUT_DIR}/"
+    # qbuild's own output is not guaranteed to carry the executable bit;
+    # a QPKG is a self-extracting shell script and must be runnable as ./file.qpkg.
+    chmod +x "${OUT_DIR}/$(basename "${f}")"
     COPIED=1
 done
 
