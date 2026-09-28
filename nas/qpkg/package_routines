@@ -1,0 +1,40 @@
+#!/bin/sh
+#
+# QDK install/upgrade/remove hooks. Hook names and the qpkg.conf field names
+# used below (Install_Path, Enable) are verified against QNAP's official
+# QDK-Guide example (qnap-dev/QDK-Guide, example/QPKG/helloWorld/package_routines).
+#
+# Persistent daemon state (config.env, history.json, aliases.json) lives
+# under "$QPKG_ROOT/data" so it survives an in-place upgrade (qbuild-generated
+# installers extract new payload over the existing Install_Path without
+# wiping it first). A full uninstall removes Install_Path entirely -- QNAP
+# QPKGs have no equivalent of DSM's separate target/var split, so uninstall
+# reasonably means "remove everything", matching typical QNAP app behavior.
+
+pkg_pre_install(){
+    # Stop any currently running instance before files are replaced
+    # (matters on upgrade; harmless no-op on a fresh install).
+    if [ -x "${SYS_QPKG_DIR}/${QPKG_SERVICE_PROGRAM}" ]; then
+        "${SYS_QPKG_DIR}/${QPKG_SERVICE_PROGRAM}" stop >/dev/null 2>&1 || true
+    fi
+}
+
+pkg_install(){
+    DATA_DIR="${SYS_QPKG_DIR}/data"
+    [ -d "${DATA_DIR}" ] || $CMD_MKDIR -p "${DATA_DIR}"
+
+    if [ ! -f "${DATA_DIR}/config.env" ]; then
+        $CMD_CP "${SYS_QPKG_DIR}/config/config.env.example" "${DATA_DIR}/config.env"
+        $CMD_CHMOD 600 "${DATA_DIR}/config.env"
+    fi
+
+    # The arch-specific and shared/ payload directories are merged flat into
+    # SYS_QPKG_DIR by qbuild, so the binary lands directly here.
+    [ -f "${SYS_QPKG_DIR}/pkg-sender-nas" ] && $CMD_CHMOD 755 "${SYS_QPKG_DIR}/pkg-sender-nas"
+}
+
+PKG_PRE_REMOVE="{
+    if [ -x \"\${SYS_QPKG_DIR}/\${QPKG_SERVICE_PROGRAM}\" ]; then
+        \"\${SYS_QPKG_DIR}/\${QPKG_SERVICE_PROGRAM}\" stop >/dev/null 2>&1 || true
+    fi
+}"
