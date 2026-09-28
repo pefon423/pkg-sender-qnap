@@ -156,6 +156,16 @@ A native DSM 7 SPK build is available under `spk/`. It packages the same Go serv
 
 The Docker and native package variants both use port 9898 by default. Do not start both at the same time.
 
+## Native QNAP package
+
+A native QNAP QPKG build is available under `qpkg/`. It packages the same Go
+server as a static Linux binary for ARM (`arm-x19`/`arm-x31`/`arm-x41`/
+`arm_64`), runs under QNAP's own package/service lifecycle (`qpkg.cfg` +
+`package_routines` + a control script), and keeps configuration under the
+package's own `Install_Path/data/` directory. See `qpkg/README.md` for build,
+architecture-selection, and install details. Unlike the Synology SPK below,
+this has not yet passed real-hardware acceptance testing.
+
 Real-hardware acceptance on DSM 7.2.2 / DS1517+ is current through SPK `0.1.0-0021`. The full FIFO behavior was exercised with the `0007` binary using localhost-only sender/receiver endpoints: first-active/second-queued serialization, restart conversion of an accepted active record to `interrupted` without replay, automatic resume of a still-queued record, explicit Retry creating a new `retryOf` record, FIFO release only after a complete HTTP transfer, and `0600` package-owned persistence all passed. `0008` added corrupt-persistence fail-closed behavior; `0009` added fail-closed in-memory rollback and FIFO position display. `0010` passed queued-only cancellation. `0011` passed an in-place production upgrade and an isolated reordering gate. `0012` added localized title display from PKG metadata. `0013` adds Japanese subtitle fallback plus offline local alias fallback and missing-alias export. `0014` adds an AI-prompt export package and Web UI copy action for manual alias curation. `0015` adds paste-and-import alias JSON with atomic write, merge, reload, and immediate rescan. `0016` adds browser-language based Chinese/English Web UI localization, a manual language switch, simplified package metadata rows, relative-path-only display, and Installed/已安装 reinstall confirmation behavior. `0017` adds configurable PS5 target IP and DSM UI entry. `0018` removes the path label prefix, keeps the language switch at the far right, and makes Installed/已安装 buttons gray while preserving reinstall confirmation behavior. `0020` removes NAS-side payload sending, places the PS5 IP controls in the status row, and makes online/offline state bold with green/red coloring. `0021` adds Web-configurable multi-root PKG library paths via `PKGSENDER_PACKAGE_DIRS` while preserving single-root `PKGSENDER_PACKAGE_DIR` compatibility. Production remains healthy with 5+ PKGs, PS5 beacon status available, Range 206, and the previous Docker container stopped as a rollback path.
 
 ## Smoke test
