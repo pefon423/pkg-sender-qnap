@@ -1,0 +1,57 @@
+name: QNAP QPKG build
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Target ARCH (x86, arm-x19, arm-x31, arm-x41, arm_64)"
+        required: true
+        default: "x86"
+      version:
+        description: "Package version"
+        required: false
+        default: "0.1.0-0001"
+
+jobs:
+  build:
+    name: Build QPKG
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: nas/go.mod
+
+      - name: Install QNAP qbuild (QDK 2.5.3)
+        run: |
+          wget -q https://github.com/qnap-dev/QDK/releases/download/v2.5.3/qdk_2.5.3_amd64.deb
+          sudo apt-get update
+          sudo apt-get install -y ./qdk_2.5.3_amd64.deb
+          qbuild --version || true
+
+      - name: Make scripts executable
+        run: chmod +x nas/qpkg/build.sh nas/qpkg/verify.sh
+
+      - name: Build QPKG
+        working-directory: nas/qpkg
+        env:
+          ARCH: ${{ github.event.inputs.arch }}
+          VERSION: ${{ github.event.inputs.version }}
+        run: sh build.sh
+
+      - name: Verify QPKG (best-effort)
+        working-directory: nas/qpkg
+        run: |
+          for f in dist/*.qpkg; do
+            sh verify.sh "${f}"
+          done
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PKGSenderNAS-${{ github.event.inputs.version }}-${{ github.event.inputs.arch }}
+          path: nas/qpkg/dist/*.qpkg
+          if-no-files-found: error
