@@ -291,7 +291,7 @@ func TestEmbeddedWebUI(t *testing.T) {
 	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
 		t.Fatalf("UI Content-Type=%q", got)
 	}
-	for _, want := range []string{"PS5 PKG Sender", "Install packages from the NAS.", "从 NAS 安装 PKG", "languageButton", "toggleLanguage", "ps5IpInput", "savePS5", "libraryButton", "saveLibrarySettings", "/api/settings/libraries", "PKG Library paths", "PKG库路径", "status-controls", "status-word", "button.installed", "/api/settings", "/api/settings/ps5", "/api/families", "/api/transfers", "/api/history", "/api/discovery", "/api/install/", "/api/retry/", "/api/cancel/", "/api/reorder/", "/api/title-alias-export", "/api/title-alias-import", "/icon/", "queueStatus", "queueOrder", "Retry", "Cancel", "cancelled", "Up", "Down", "Copy alias AI prompt", "Import aliases", "Installed", "已安装", "exportAliasPrompt", "submitAliasImport", "aliasTemplate", "aiPrompt", "pkg.titleId", "pkg.path", "packageTypeLabel", "displayTitle", "secondaryTitle", "localizedTitleText", "Recent activity", "Install outcome unverified", "DLC", "在线", "offline"} {
+	for _, want := range []string{"PS5 PKG Sender", "Install packages from the NAS.", "從 NAS 安裝 PKG", "languageButton", "toggleLanguage", "ps5IpInput", "savePS5", "libraryButton", "saveLibrarySettings", "/api/settings/libraries", "PKG Library paths", "PKG庫路徑", "status-controls", "status-word", "button.installed", "/api/settings", "/api/settings/ps5", "/api/families", "/api/transfers", "/api/history", "/api/discovery", "/api/install/", "/api/retry/", "/api/cancel/", "/api/clear/", "/api/reorder/", "/api/title-alias-export", "/api/title-alias-import", "/icon/", "queueStatus", "queueOrder", "Retry", "Cancel", "Clear", "清除", "clearHistory", "supersededByInstall", "viewListButton", "viewBlocksButton", "pkgSenderLayout", ".grid.blocks", "Blocks", "區塊", "cancelled", "Up", "Down", "Copy alias AI prompt", "Import aliases", "Installed", "已安裝", "exportAliasPrompt", "submitAliasImport", "aliasTemplate", "aiPrompt", "pkg.titleId", "pkg.path", "packageTypeLabel", "displayTitle", "secondaryTitle", "localizedTitleText", "Recent activity", "Install outcome unverified", "DLC", "在線", "offline"} {
 		if !bytes.Contains(body, []byte(want)) {
 			t.Fatalf("UI does not contain %q", want)
 		}
@@ -451,7 +451,7 @@ func TestSettingsAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `PKGSENDER_PACKAGE_DIRS="[`) || !strings.Contains(string(data), `PKGSENDER_PACKAGE_DIR="`+filepath.Clean(root)+`"`) {
+	if !strings.Contains(string(data), `PKGSENDER_PACKAGE_DIRS="[`) || !strings.Contains(string(data), "PKGSENDER_PACKAGE_DIR="+strconv.Quote(filepath.Clean(root))) {
 		t.Fatalf("library config was not updated: %s", data)
 	}
 }
@@ -947,6 +947,124 @@ func TestCancelOnlyQueuedInstallAndDoNotContactReceiver(t *testing.T) {
 	time.Sleep(25 * time.Millisecond)
 	if calls := installer.Calls(); len(calls) != 1 {
 		t.Fatalf("requeued item bypassed active FIFO slot: %+v", calls)
+	}
+}
+
+func TestClearActiveInstallReleasesQueueForNextInstall(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"A.pkg", "B.pkg"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("0123456789"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := pkgstore.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	var first, second pkgstore.Package
+	for _, pkg := range store.List() {
+		switch pkg.Name {
+		case "A.pkg":
+			first = pkg
+		case "B.pkg":
+			second = pkg
+		}
+	}
+	if first.ID == "" || second.ID == "" {
+		t.Fatalf("missing packages: first=%+v second=%+v", first, second)
+	}
+
+	installer := &fakeInstaller{}
+	historyStore := history.NewMemory(10)
+	app, err := NewWithHistory(store, installer, "http://192.168.1.20:9898", log.New(io.Discard, "", 0), historyStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	post := func(path string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	for _, pkg := range []pkgstore.Package{first, second} {
+		if status := post("/api/install/" + pkg.ID); status != http.StatusAccepted {
+			t.Fatalf("enqueue %s status=%d, want 202", pkg.Name, status)
+		}
+	}
+	var firstHistoryID, secondHistoryID string
+	waitFor(t, func() bool {
+		if len(installer.Calls()) != 1 {
+			return false
+		}
+		for _, record := range historyStore.List() {
+			switch record.PackageID {
+			case first.ID:
+				if record.QueueStatus == history.QueueActive {
+					firstHistoryID = record.ID
+				}
+			case second.ID:
+				if record.QueueStatus == history.QueueQueued {
+					secondHistoryID = record.ID
+				}
+			}
+		}
+		return firstHistoryID != "" && secondHistoryID != ""
+	})
+
+	if status := post("/api/clear/" + secondHistoryID); status != http.StatusConflict {
+		t.Fatalf("clear queued status=%d, want 409", status)
+	}
+	if status := post("/api/clear/does-not-exist"); status != http.StatusNotFound {
+		t.Fatalf("clear unknown status=%d, want 404", status)
+	}
+	getResp, err := http.Get(srv.URL + "/api/clear/" + firstHistoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET clear status=%d, want 405", getResp.StatusCode)
+	}
+	if active, _ := historyStore.Get(firstHistoryID); active.QueueStatus != history.QueueActive {
+		t.Fatalf("refused clear changed the active record: %+v", active)
+	}
+	if queued, _ := historyStore.Get(secondHistoryID); queued.QueueStatus != history.QueueQueued {
+		t.Fatalf("refused clear changed the queued record: %+v", queued)
+	}
+
+	if status := post("/api/clear/" + firstHistoryID); status != http.StatusOK {
+		t.Fatalf("clear active status=%d, want 200", status)
+	}
+	cleared, ok := historyStore.Get(firstHistoryID)
+	if !ok || cleared.QueueStatus != history.QueueInterrupted || cleared.TransferStatus != "interrupted" {
+		t.Fatalf("cleared record=%+v ok=%v", cleared, ok)
+	}
+	for _, snapshot := range app.transfers.List() {
+		if snapshot.ID == first.ID {
+			t.Fatalf("cleared install still tracked as a live transfer: %+v", snapshot)
+		}
+	}
+	waitFor(t, func() bool { return len(installer.Calls()) == 2 })
+	if calls := installer.Calls(); calls[1].name != second.Name {
+		t.Fatalf("queue moved on to %q, want %q", calls[1].name, second.Name)
+	}
+	if status := post("/api/clear/" + firstHistoryID); status != http.StatusConflict {
+		t.Fatalf("clear already-interrupted status=%d, want 409", status)
+	}
+	if status := post("/api/retry/" + firstHistoryID); status != http.StatusAccepted {
+		t.Fatalf("retry after clear status=%d, want 202", status)
 	}
 }
 

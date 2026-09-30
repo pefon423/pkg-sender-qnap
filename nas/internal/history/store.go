@@ -327,6 +327,37 @@ func (s *Store) CancelQueued(id string) (Record, bool, error) {
 	return Record{}, false, nil
 }
 
+// InterruptActive is the on-demand version of the sweep Open runs at startup:
+// it marks one active install interrupted so the queue slot is released. It
+// never contacts the PS5 and refuses any record that is not active.
+func (s *Store) InterruptActive(id string) (Record, bool, error) {
+	if s == nil {
+		return Record{}, false, nil
+	}
+	if s.unavailable != nil {
+		return Record{}, false, s.unavailable
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.records {
+		if s.records[i].ID != id {
+			continue
+		}
+		if s.records[i].QueueStatus != QueueActive {
+			return s.records[i], false, nil
+		}
+		oldRecord := s.records[i]
+		interruptRecord(&s.records[i], s.now().UTC())
+		if err := s.persistLocked(); err != nil {
+			s.records[i] = oldRecord
+			return oldRecord, false, err
+		}
+		delete(s.lastProgressPersist, id)
+		return s.records[i], true, nil
+	}
+	return Record{}, false, nil
+}
+
 func (s *Store) MoveQueued(id, direction string) (Record, bool, error) {
 	if s == nil {
 		return Record{}, false, nil
@@ -545,25 +576,30 @@ func (s *Store) interruptActiveLocked() bool {
 	changed := false
 	now := s.now().UTC()
 	for i := range s.records {
-		record := &s.records[i]
-		recordChanged := false
-		if record.QueueStatus == QueueSubmitting || record.QueueStatus == QueueActive {
-			record.QueueStatus = QueueInterrupted
-			recordChanged = true
-		}
-		if record.ControlStatus == "requesting" {
-			record.ControlStatus = "interrupted"
-			recordChanged = true
-		}
-		switch record.TransferStatus {
-		case "waiting", "downloading":
-			record.TransferStatus = "interrupted"
-			recordChanged = true
-		}
-		if recordChanged {
-			record.UpdatedAt = now
+		if interruptRecord(&s.records[i], now) {
 			changed = true
 		}
+	}
+	return changed
+}
+
+func interruptRecord(record *Record, now time.Time) bool {
+	changed := false
+	if record.QueueStatus == QueueSubmitting || record.QueueStatus == QueueActive {
+		record.QueueStatus = QueueInterrupted
+		changed = true
+	}
+	if record.ControlStatus == "requesting" {
+		record.ControlStatus = "interrupted"
+		changed = true
+	}
+	switch record.TransferStatus {
+	case "waiting", "downloading":
+		record.TransferStatus = "interrupted"
+		changed = true
+	}
+	if changed {
+		record.UpdatedAt = now
 	}
 	return changed
 }

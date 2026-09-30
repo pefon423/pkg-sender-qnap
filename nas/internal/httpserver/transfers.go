@@ -92,6 +92,14 @@ func (t *transferTracker) MarkError(id string, err error) (TransferSnapshot, boo
 	return transferSnapshot(s), true
 }
 
+func (t *transferTracker) Clear(id string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.sessions[id]
+	delete(t.sessions, id)
+	return ok
+}
+
 func (t *transferTracker) Record(id, method string, status int, contentRange string, bytesWritten int64) (TransferSnapshot, bool) {
 	if method != "GET" || bytesWritten <= 0 || (status != 200 && status != 206) {
 		return TransferSnapshot{}, false

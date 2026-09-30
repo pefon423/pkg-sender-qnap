@@ -188,7 +188,7 @@ func TestTitleAliasesFallbackAndMissingExport(t *testing.T) {
 	if len(export.Missing) != 1 || export.Missing[0].TitleID != "PPSA20000" {
 		t.Fatalf("export missing=%+v", export.Missing)
 	}
-	if export.AIPrompt == "" || !strings.Contains(export.AIPrompt, "PPSA20000") || !strings.Contains(export.AIPrompt, "只返回 JSON") {
+	if export.AIPrompt == "" || !strings.Contains(export.AIPrompt, "PPSA20000") || !strings.Contains(export.AIPrompt, "只回傳 JSON") {
 		t.Fatalf("unexpected AI prompt: %q", export.AIPrompt)
 	}
 	if _, ok := export.AliasTemplate["_aiPrompt"].(string); !ok {

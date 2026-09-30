@@ -327,7 +327,7 @@ func BuildTitleAliasExport(missing []MissingTitleAlias) TitleAliasExport {
 
 func buildTitleAliasPrompt(missing []MissingTitleAlias) string {
 	template := make(map[string]any, len(missing)+1)
-	template["_aiPrompt"] = "保留或替换为 GET /api/title-alias-export 返回的 aiPrompt；程序会忽略这个字段。"
+	template["_aiPrompt"] = "保留或取代為 GET /api/title-alias-export 回傳的 aiPrompt；程式會忽略這個欄位。"
 	for _, item := range missing {
 		key := missingAliasKey(item)
 		if key == "" {
@@ -337,19 +337,19 @@ func buildTitleAliasPrompt(missing []MissingTitleAlias) string {
 	}
 	missingJSON, _ := json.MarshalIndent(missing, "", "  ")
 	templateJSON, _ := json.MarshalIndent(template, "", "  ")
-	return strings.TrimSpace(`请根据下面的 PS5 Title ID / Content ID / 英文标题，查找对应游戏的简体中文名称，并填写 aliases.json。
+	return strings.TrimSpace(`請根據下面的 PS5 Title ID / Content ID / 英文標題，查找對應遊戲的繁體中文名稱，並填寫 aliases.json。
 
 要求：
-1. 只返回 JSON，不要解释。
-2. JSON 顶层 key 必须使用给定的 titleId；如果没有 titleId 才使用 contentId。
-3. 每个条目至少填写 zh-Hans。只有确定繁体中文官方/常用名称时才填写 zh-Hant；不确定可留空字符串。
-4. 不要翻译 DLC 解锁器、补丁、版本号、发布组名称；无法确认时保留空字符串。
-5. 不要删除 _aiPrompt 字段；它会被程序忽略，仅用于后续复制给 AI。
+1. 只回傳 JSON，不要解釋。
+2. JSON 頂層 key 必須使用給定的 titleId；如果沒有 titleId 才使用 contentId。
+3. 每個條目至少填寫 zh-Hant。只有確定簡體中文官方/常用名稱時才填寫 zh-Hans；不確定可留空字串。
+4. 不要翻譯 DLC 解鎖器、補丁、版本號、發布組名稱；無法確認時保留空字串。
+5. 不要刪除 _aiPrompt 欄位；它會被程式忽略，僅用於後續複製給 AI。
 
-缺失别名列表：
+缺失別名清單：
 ` + string(missingJSON) + `
 
-请按这个模板填写：
+請按這個範本填寫：
 ` + string(templateJSON))
 }
 

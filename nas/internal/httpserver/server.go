@@ -171,6 +171,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/retry/", s.handleRetry)
 	s.mux.HandleFunc("/api/reorder/", s.handleReorder)
 	s.mux.HandleFunc("/api/cancel/", s.handleCancel)
+	s.mux.HandleFunc("/api/clear/", s.handleClear)
 	s.mux.HandleFunc("/icon/", s.handleIcon)
 	s.mux.HandleFunc("/pkg/", s.handlePackage)
 }
@@ -206,6 +207,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			"retry":             "POST /api/retry/{historyId}",
 			"reorder":           "POST /api/reorder/{historyId}",
 			"cancel":            "POST /api/cancel/{historyId}",
+			"clear":             "POST /api/clear/{historyId}",
 			"icon":              "GET|HEAD /icon/{id}",
 			"package":           "GET|HEAD /pkg/{id}",
 			"health":            "GET /health",
@@ -814,6 +816,52 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 		"historyId": cancelled.ID,
 		"id":        cancelled.PackageID,
 		"name":      cancelled.Name,
+	})
+}
+
+func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, "POST")
+		return
+	}
+
+	historyID, ok := routeID(r.URL.Path, "/api/clear/")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	record, ok := s.history.Get(historyID)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if record.QueueStatus != history.QueueActive {
+		writeError(w, http.StatusConflict, "only active installs can be cleared")
+		return
+	}
+
+	cleared, changed, err := s.history.InterruptActive(historyID)
+	if err != nil {
+		s.logger.Printf("clear active install history=%s failed: %v", historyID, err)
+		if errors.Is(err, history.ErrUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "install queue persistence is unavailable")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "could not persist queue clear")
+		return
+	}
+	if !changed {
+		writeError(w, http.StatusConflict, "install is no longer active")
+		return
+	}
+	s.transfers.Clear(cleared.PackageID)
+	s.logger.Printf("install queue cleared: history=%s file=%s", cleared.ID, cleared.RelativePath)
+	s.kickQueue()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":    "cleared",
+		"historyId": cleared.ID,
+		"id":        cleared.PackageID,
+		"name":      cleared.Name,
 	})
 }
 

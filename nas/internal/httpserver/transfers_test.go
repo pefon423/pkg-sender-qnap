@@ -94,6 +94,26 @@ func TestTransferTrackerDoesNotOverwriteActiveDownloadWithLateControlError(t *te
 	}
 }
 
+func TestTransferTrackerClearForgetsSessionAndIgnoresLateRanges(t *testing.T) {
+	tracker := newTransferTracker()
+	pkg := pkgstore.Package{ID: "pkg-clear", Name: "Game.pkg", RelativePath: "Game.pkg", Size: 100}
+	tracker.Start(pkg)
+	tracker.Record(pkg.ID, "GET", 206, "bytes 0-49/100", 50)
+
+	if !tracker.Clear(pkg.ID) {
+		t.Fatal("Clear did not find the session")
+	}
+	if sessions := tracker.List(); len(sessions) != 0 {
+		t.Fatalf("sessions after clear=%+v", sessions)
+	}
+	if _, ok := tracker.Record(pkg.ID, "GET", 206, "bytes 50-99/100", 50); ok {
+		t.Fatal("late range recreated a cleared session")
+	}
+	if tracker.Clear(pkg.ID) {
+		t.Fatal("second Clear should report nothing to clear")
+	}
+}
+
 func TestTransferTrackerIgnoresUntrackedAndHeadRequests(t *testing.T) {
 	tracker := newTransferTracker()
 	if _, ok := tracker.Record("missing", "GET", 206, "bytes 0-9/10", 10); ok {

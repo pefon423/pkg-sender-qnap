@@ -91,7 +91,7 @@ start_daemon() {
     remove_stale_pid
 
     if pid_is_running; then
-        echo "${DISPLAY_NAME} is already running (PID: $(cat "${PID_FILE}"))"
+        echo "${DISPLAY_NAME} is already running (PID: $(cat "${PID_FILE}"))."
         return 0
     fi
 
@@ -160,7 +160,7 @@ stop_daemon() {
 status_daemon() {
     remove_stale_pid
     if pid_is_running; then
-        echo "${DISPLAY_NAME} is running (PID: $(cat "${PID_FILE}"))"
+        echo "${DISPLAY_NAME} is running (PID: $(cat "${PID_FILE}"))."
         return 0
     fi
     echo "${DISPLAY_NAME} is stopped."

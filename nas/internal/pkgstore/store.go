@@ -69,6 +69,13 @@ func NewWithRootsAndTitleAliases(roots []string, aliases TitleAliases) (*Store, 
 	}, nil
 }
 
+// rootAccessTimeout bounds how long a single root's existence check (or, in
+// Scan, a single root's directory walk) may take. Without it, an
+// unreachable or newly-unresponsive network path (a UNC share, a mounted
+// remote volume) can block server startup or a rescan indefinitely, since
+// neither os.Stat nor filepath.WalkDir accept a deadline.
+const rootAccessTimeout = 10 * time.Second
+
 func NormalizeRoots(roots []string) ([]string, error) {
 	seen := map[string]bool{}
 	normalized := make([]string, 0, len(roots))
@@ -79,26 +86,50 @@ func NormalizeRoots(roots []string) ([]string, error) {
 		}
 		abs, err := filepath.Abs(root)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		abs = filepath.Clean(abs)
 		if seen[abs] {
 			continue
 		}
-		info, err := os.Stat(abs)
-		if err != nil {
-			return nil, fmt.Errorf("package root %q is not accessible: %w", root, err)
-		}
-		if !info.IsDir() {
-			return nil, fmt.Errorf("package root %q is not a directory", root)
+		// A root that is not accessible right now -- including one that
+		// times out, e.g. a network share that has stopped responding --
+		// is skipped rather than failing every other configured root too.
+		// Mirrors scanRoot's existing "one unreadable subtree does not
+		// invalidate the whole library" behavior, one level up.
+		info, err := statWithTimeout(abs, rootAccessTimeout)
+		if err != nil || !info.IsDir() {
+			continue
 		}
 		seen[abs] = true
 		normalized = append(normalized, abs)
 	}
 	if len(normalized) == 0 {
-		return nil, errors.New("at least one package root is required")
+		return nil, errors.New("at least one package root is required (none of the configured roots are currently accessible)")
 	}
 	return normalized, nil
+}
+
+// statWithTimeout is os.Stat with an upper bound on how long it may block.
+// os.Stat itself has no cancellation, so on timeout the underlying call may
+// still be outstanding in the background; the caller simply stops waiting
+// on it and treats the root as inaccessible for now.
+func statWithTimeout(path string, timeout time.Duration) (os.FileInfo, error) {
+	type result struct {
+		info os.FileInfo
+		err  error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		info, err := os.Stat(path)
+		resultCh <- result{info: info, err: err}
+	}()
+	select {
+	case r := <-resultCh:
+		return r.info, r.err
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("timed out after %s waiting for %q to respond", timeout, path)
+	}
 }
 
 func (s *Store) Root() string {
@@ -137,7 +168,7 @@ func (s *Store) Scan() (int, error) {
 	next := make(map[string]entry)
 	packages := make([]Package, 0)
 	for rootIndex, root := range roots {
-		if err := scanRoot(rootIndex, root, len(roots), aliases, next, &packages); err != nil {
+		if err := scanRootWithTimeout(rootIndex, root, len(roots), aliases, next, &packages, rootAccessTimeout); err != nil {
 			return 0, err
 		}
 	}
@@ -156,6 +187,42 @@ func (s *Store) Scan() (int, error) {
 	s.mu.Unlock()
 
 	return len(packages), nil
+}
+
+// scanRootWithTimeout runs scanRoot but never blocks the caller longer than
+// timeout. filepath.WalkDir cannot be cancelled mid-flight, so a root that
+// does not finish in time (e.g. a network share that stops responding
+// partway through) has its goroutine abandoned rather than killed: it
+// writes only into its own local next/packages, merged into the caller's
+// shared next/packages only if it completes in time, so an abandoned scan
+// can never race with the caller's data structures. A timeout is not
+// treated as a hard error; other roots still get their full budget.
+func scanRootWithTimeout(rootIndex int, root string, rootCount int, aliases TitleAliases, next map[string]entry, packages *[]Package, timeout time.Duration) error {
+	type result struct {
+		next     map[string]entry
+		packages []Package
+		err      error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		localNext := make(map[string]entry)
+		localPackages := make([]Package, 0)
+		err := scanRoot(rootIndex, root, rootCount, aliases, localNext, &localPackages)
+		resultCh <- result{next: localNext, packages: localPackages, err: err}
+	}()
+	select {
+	case r := <-resultCh:
+		if r.err != nil {
+			return r.err
+		}
+		for id, e := range r.next {
+			next[id] = e
+		}
+		*packages = append(*packages, r.packages...)
+		return nil
+	case <-time.After(timeout):
+		return nil
+	}
 }
 
 func scanRoot(rootIndex int, root string, rootCount int, aliases TitleAliases, next map[string]entry, packages *[]Package) error {

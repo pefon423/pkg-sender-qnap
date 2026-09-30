@@ -25,6 +25,7 @@ Not included yet: automatic retry, image/folder copy, PS4/GoldHEN support.
 - `POST /api/install/{id}`
 - `POST /api/retry/{historyId}`
 - `POST /api/cancel/{historyId}`
+- `POST /api/clear/{historyId}`
 - `POST /api/reorder/{historyId}`
 - `GET|HEAD /pkg/{id}`
 - `GET|HEAD /icon/{id}`
@@ -111,7 +112,8 @@ Open `http://NAS_IP:9898/ui/` in a browser. The embedded UI has no third-party r
 - PKG metadata listing and filtering, including English primary titles and Chinese/Japanese/local-alias secondary titles when available;
 - manual library rescan;
 - an Install action with confirmation;
-- a persistent FIFO install queue with explicit manual Retry for failed/interrupted attempts and Cancel for records that are still queued;
+- a persistent FIFO install queue with explicit manual Retry for failed/interrupted attempts, Cancel for records that are still queued, and Clear for an `active` install that is stuck (see `POST /api/clear/{historyId}`); Retry is hidden once a newer attempt for the same package has completed, and a Retry after a completed install asks for reinstall confirmation;
+- a List / Blocks layout switch for the package view (Blocks shows three titles per row, two on narrow windows and one on phones); the choice is remembered per browser in `localStorage` (`pkgSenderLayout`);
 - live in-memory transfer status and byte-accurate percentage polling once per second.
 - recent persistent install/transfer history with receiver, transfer, and install-outcome semantics kept separate.
 - passive PS5 receiver discovery status from UDP `12801`.
@@ -269,6 +271,8 @@ The queue is strictly sequential. Each queued record has a persisted `queueOrder
 On restart, records that were still `queued` remain queued and are resumed only after the HTTP listener is bound. Records that were already `submitting` or `active` become `queueStatus=interrupted` and are never automatically replayed, because the NAS cannot prove whether the PS5 accepted or partially processed the earlier request. `POST /api/retry/{historyId}` is explicit user intent and creates a new history record with `retryOf` pointing to the previous attempt.
 
 `POST /api/cancel/{historyId}` is intentionally narrower than Retry: it only succeeds while `queueStatus=queued`. Cancellation is persisted as `queueStatus=cancelled` and releases that package from the pending set. Once a task is `submitting` or `active`, cancellation returns HTTP 409 because the receiver may already have accepted or started processing it; the NAS does not claim to remotely cancel PS5 work already in flight.
+
+`POST /api/clear/{historyId}` is the manual escape hatch for a queue that is stuck behind an `active` install, for example when the PS5 accepted the request but never fetched the PKG, or restarted mid-transfer. It only succeeds while `queueStatus=active` and applies exactly the transition a service restart would: `queueStatus=interrupted` and `transferStatus=interrupted` (progress counters are kept), after which the queue moves on to the next `queued` record. It never contacts the PS5 and cannot stop a download the PS5 is still performing; later Range requests for that package are simply no longer tracked. The record can then be retried with `POST /api/retry/{historyId}`. Records that are `queued`, `submitting`, or already finished return HTTP 409. The Web UI shows a Clear button on the `active` row and asks for confirmation first.
 
 `POST /api/reorder/{historyId}` accepts `{"direction":"up"}` or `{"direction":"down"}` and only moves records that are still `queued`. Moving a `submitting`/`active` record, or moving beyond a queue boundary, returns HTTP 409. Older persisted queue records without `queueOrder` are migrated on load using their original FIFO `startedAt`/ID order.
 

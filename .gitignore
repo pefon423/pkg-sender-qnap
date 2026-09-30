@@ -14,3 +14,8 @@ PkgSender-Setup-*.exe
 # IDE
 .vs/
 *.user
+
+# local Windows NAS deployment (binaries, config, history)
+nas/windows/*.exe
+nas/windows/*.exe~
+nas/windows/data/

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -50,12 +51,16 @@ func TestHistoryPersistsAndReloadsTerminalRecord(t *testing.T) {
 	if got.ID != record.ID || got.ControlStatus != "accepted" || got.TransferStatus != "complete" || got.InstallStatus != "unverified" || got.Transferred != 100 {
 		t.Fatalf("reloaded record=%+v", got)
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("history mode=%#o, want 0600", info.Mode().Perm())
+	// Windows has no POSIX owner/group/other permission bits; os.Chmod(0600)
+	// cannot be enforced or observed the same way there.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("history mode=%#o, want 0600", info.Mode().Perm())
+		}
 	}
 }
 
@@ -492,6 +497,128 @@ func TestCancelQueuedPersistenceFailureRollsBack(t *testing.T) {
 	current, ok := store.Get(record.ID)
 	if !ok || current.QueueStatus != QueueQueued || !store.HasPendingPackage(pkg.ID) {
 		t.Fatalf("failed cancel did not roll back queued state: %+v ok=%v", current, ok)
+	}
+}
+
+func TestInterruptActiveReleasesQueueSlotAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.json")
+	store, err := Open(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPkg := pkgstore.Package{ID: "first", Name: "First.pkg", RelativePath: "First.pkg", Size: 10}
+	secondPkg := pkgstore.Package{ID: "second", Name: "Second.pkg", RelativePath: "Second.pkg", Size: 10}
+	first, err := store.CreateQueued(firstPkg, "http://nas/pkg/first", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateQueued(secondPkg, "http://nas/pkg/second", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.ClaimNextQueued(); err != nil || !ok {
+		t.Fatalf("ClaimNextQueued ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := store.MarkAccepted(first.ID); err != nil || !ok {
+		t.Fatalf("MarkAccepted ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := store.UpdateTransfer(firstPkg.ID, "downloading", 4, 10, 1); err != nil || !ok {
+		t.Fatalf("UpdateTransfer ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := store.ClaimNextQueued(); err != nil || ok {
+		t.Fatalf("second item claimed behind an active install: ok=%v err=%v", ok, err)
+	}
+
+	cleared, changed, err := store.InterruptActive(first.ID)
+	if err != nil || !changed {
+		t.Fatalf("InterruptActive changed=%v err=%v", changed, err)
+	}
+	if cleared.QueueStatus != QueueInterrupted || cleared.ControlStatus != "accepted" || cleared.TransferStatus != "interrupted" || cleared.Transferred != 4 {
+		t.Fatalf("cleared record=%+v", cleared)
+	}
+	if store.HasPendingPackage(firstPkg.ID) {
+		t.Fatal("cleared package must no longer be pending")
+	}
+	claimed, ok, err := store.ClaimNextQueued()
+	if err != nil || !ok || claimed.ID != second.ID {
+		t.Fatalf("next claim=%+v ok=%v err=%v, want second queued record", claimed, ok, err)
+	}
+
+	reloaded, err := Open(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := reloaded.Get(first.ID); !ok || got.QueueStatus != QueueInterrupted || got.TransferStatus != "interrupted" {
+		t.Fatalf("cleared state was not persisted: %+v ok=%v", got, ok)
+	}
+}
+
+func TestInterruptActiveRefusesRecordsThatAreNotActive(t *testing.T) {
+	store := NewMemory(10)
+	pkg := pkgstore.Package{ID: "pkg", Name: "Game.pkg", RelativePath: "Game.pkg", Size: 10}
+	record, err := store.CreateQueued(pkg, "http://nas/pkg/pkg", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, changed, err := store.InterruptActive(record.ID)
+	if err != nil || changed || got.QueueStatus != QueueQueued {
+		t.Fatalf("queued interrupt changed=%v record=%+v err=%v", changed, got, err)
+	}
+	if _, ok, err := store.ClaimNextQueued(); err != nil || !ok {
+		t.Fatalf("ClaimNextQueued ok=%v err=%v", ok, err)
+	}
+	got, changed, err = store.InterruptActive(record.ID)
+	if err != nil || changed || got.QueueStatus != QueueSubmitting {
+		t.Fatalf("submitting interrupt changed=%v record=%+v err=%v", changed, got, err)
+	}
+	if _, ok, err := store.MarkAccepted(record.ID); err != nil || !ok {
+		t.Fatalf("MarkAccepted ok=%v err=%v", ok, err)
+	}
+	if _, changed, err := store.InterruptActive(record.ID); err != nil || !changed {
+		t.Fatalf("active interrupt changed=%v err=%v", changed, err)
+	}
+	got, changed, err = store.InterruptActive(record.ID)
+	if err != nil || changed || got.QueueStatus != QueueInterrupted {
+		t.Fatalf("second interrupt changed=%v record=%+v err=%v", changed, got, err)
+	}
+	if got, changed, err := store.InterruptActive("missing"); err != nil || changed || got.ID != "" {
+		t.Fatalf("missing record changed=%v record=%+v err=%v", changed, got, err)
+	}
+}
+
+func TestInterruptActivePersistenceFailureRollsBack(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.json")
+	store, err := Open(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := pkgstore.Package{ID: "pkg", Name: "Game.pkg", RelativePath: "Game.pkg", Size: 10}
+	record, err := store.CreateQueued(pkg, "http://nas/pkg/pkg", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.ClaimNextQueued(); err != nil || !ok {
+		t.Fatalf("ClaimNextQueued ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := store.MarkAccepted(record.ID); err != nil || !ok {
+		t.Fatalf("MarkAccepted ok=%v err=%v", ok, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got, changed, err := store.InterruptActive(record.ID)
+	if err == nil || changed {
+		t.Fatalf("InterruptActive changed=%v err=%v, want persistence failure", changed, err)
+	}
+	if got.QueueStatus != QueueActive {
+		t.Fatalf("failed clear advanced returned state: %+v", got)
+	}
+	current, ok := store.Get(record.ID)
+	if !ok || current.QueueStatus != QueueActive || current.TransferStatus != "waiting" || !store.HasPendingPackage(pkg.ID) {
+		t.Fatalf("failed clear did not roll back active state: %+v ok=%v", current, ok)
 	}
 }
 
