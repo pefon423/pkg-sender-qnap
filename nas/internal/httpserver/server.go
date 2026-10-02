@@ -515,7 +515,7 @@ func (s *Server) handleIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "private, max-age=300")
+	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, pkg.ID+".png", modTime, bytes.NewReader(icon))
 }

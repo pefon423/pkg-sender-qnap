@@ -25,6 +25,9 @@ type Package struct {
 	LibraryRoot    string `json:"libraryRoot,omitempty"`
 	Size           int64  `json:"size"`
 	MetadataParsed bool   `json:"metadataParsed"`
+	// ModifiedAt lets clients tell a file replaced in place (same path, so
+	// same ID) from the version they installed earlier.
+	ModifiedAt time.Time `json:"modifiedAt"`
 	pkgmeta.Metadata
 }
 
@@ -273,6 +276,7 @@ func scanRoot(rootIndex int, root string, rootCount int, aliases TitleAliases, n
 			Path:           filepath.ToSlash(filepath.Join(root, rel)),
 			LibraryRoot:    filepath.ToSlash(root),
 			Size:           info.Size(),
+			ModifiedAt:     info.ModTime(),
 			MetadataParsed: metaErr == nil,
 			Metadata:       meta,
 		}
