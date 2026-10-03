@@ -268,14 +268,54 @@ func (a TitleAliases) normalized() TitleAliases {
 }
 
 func (a TitleAliases) apply(meta *pkgmeta.Metadata) {
-	if len(a) == 0 || meta == nil || strings.TrimSpace(meta.SecondaryTitle) != "" {
+	if len(a) == 0 || meta == nil {
 		return
 	}
 	alias := a.find(meta.TitleID, meta.ContentID)
+	if len(alias) == 0 {
+		return
+	}
+
+	// An English alias becomes the main title when the PKG itself carries no English title (e.g. a Chinese-only repack), giving
+	// the usual "English | 中文" pair: the alias' Chinese title (or the title the PKG had) moves to the secondary line.
+	if english := firstEnglishAliasTitle(alias); english != "" && !hasEnglishTitle(meta) && !strings.EqualFold(strings.TrimSpace(english), strings.TrimSpace(meta.DisplayTitle)) {
+		previous := strings.TrimSpace(meta.DisplayTitle)
+		meta.DisplayTitle = english
+		meta.SecondaryTitle = ""
+		if secondary := firstAliasTitle(alias); secondary != "" && !strings.EqualFold(secondary, english) {
+			meta.SecondaryTitle = secondary
+		} else if previous != "" {
+			meta.SecondaryTitle = previous
+		}
+		return
+	}
+
+	if strings.TrimSpace(meta.SecondaryTitle) != "" {
+		return
+	}
 	secondary := firstAliasTitle(alias)
 	if secondary != "" && !strings.EqualFold(strings.TrimSpace(secondary), strings.TrimSpace(meta.DisplayTitle)) {
 		meta.SecondaryTitle = secondary
 	}
+}
+
+func firstEnglishAliasTitle(values map[string]string) string {
+	for _, key := range []string{"en-US", "en-GB", "en"} {
+		if title := strings.TrimSpace(values[key]); title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+func hasEnglishTitle(meta *pkgmeta.Metadata) bool {
+	for lang, title := range meta.LocalizedTitles {
+		lang = strings.ToLower(strings.TrimSpace(lang))
+		if (lang == "en" || strings.HasPrefix(lang, "en-")) && strings.TrimSpace(title) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (a TitleAliases) find(titleID, contentID string) map[string]string {

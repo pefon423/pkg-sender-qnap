@@ -143,6 +143,41 @@ func TestPackageJSONFlattensMetadataFields(t *testing.T) {
 	}
 }
 
+func TestTitleAliasEnglishBecomesMainTitleWhenPackageHasNone(t *testing.T) {
+	aliases := TitleAliases{
+		"PPSA16951": {"en-US": "Tales of Xillia Remastered", "zh-Hant": "無盡傳奇 Remastered"},
+	}.normalized()
+
+	chineseOnly := pkgmeta.Metadata{
+		TitleID:         "PPSA16951",
+		Title:           "無盡傳奇 Remastered by 月凌风",
+		DisplayTitle:    "無盡傳奇 Remastered by 月凌风",
+		LocalizedTitles: map[string]string{"zh-Hant": "無盡傳奇 Remastered by 月凌风", "ko-KR": "테일즈 오브 엑실리아 리마스터"},
+	}
+	aliases.apply(&chineseOnly)
+	if chineseOnly.DisplayTitle != "Tales of Xillia Remastered" || chineseOnly.SecondaryTitle != "無盡傳奇 Remastered" {
+		t.Fatalf("English alias should give English | Chinese: %+v", chineseOnly)
+	}
+
+	withEnglish := pkgmeta.Metadata{
+		TitleID:         "PPSA16951",
+		DisplayTitle:    "Package English",
+		SecondaryTitle:  "封裝中文",
+		LocalizedTitles: map[string]string{"en-US": "Package English"},
+	}
+	aliases.apply(&withEnglish)
+	if withEnglish.DisplayTitle != "Package English" || withEnglish.SecondaryTitle != "封裝中文" {
+		t.Fatalf("the PKG's own English title and subtitle must win: %+v", withEnglish)
+	}
+
+	onlyEnglishAlias := TitleAliases{"PPSA00001": {"en": "Only English"}}.normalized()
+	noSecondary := pkgmeta.Metadata{TitleID: "PPSA00001", DisplayTitle: "僅中文標題", LocalizedTitles: map[string]string{"zh-Hant": "僅中文標題"}}
+	onlyEnglishAlias.apply(&noSecondary)
+	if noSecondary.DisplayTitle != "Only English" || noSecondary.SecondaryTitle != "僅中文標題" {
+		t.Fatalf("previous title should move to the secondary line: %+v", noSecondary)
+	}
+}
+
 func TestTitleAliasesFallbackAndMissingExport(t *testing.T) {
 	aliases := TitleAliases{
 		"ppsa10000":                            {"zh-Hans": "中文别名"},
