@@ -107,6 +107,20 @@ func Read(r io.ReaderAt, size int64, filename string) (Metadata, error) {
 		}
 	}
 
+	// PS4 packages carry a PARAM.SFO (0x1000) instead of a param.json. Some also
+	// have an unrelated JSON in entry 0x2000, so decide by "no title yet", not
+	// by whether that entry parsed.
+	sfoType := ""
+	if meta.Title == "" {
+		if p, ok := findReadableEntry(entries, sfoEntryParam); ok && p.dataSize <= maxParamSize {
+			if data, readErr := readAt(r, cnt.base+int64(p.dataOff), int64(p.dataSize), size); readErr == nil {
+				if sfo, ok := parseSFO(data); ok {
+					sfoType = applySFO(&meta, sfo)
+				}
+			}
+		}
+	}
+
 	patchByStructure := hasReadableEntry(entries, 0x0407) ||
 		hasReadableEntry(entries, 0x0408) ||
 		hasReadableEntry(entries, 0x1008)
@@ -116,6 +130,10 @@ func Read(r io.ReaderAt, size int64, filename string) (Metadata, error) {
 	fullApplication := binary.BigEndian.Uint32(cnt.header[0x74:0x78]) == contentTypeApplication
 
 	classify(&meta, filename, patchByStructure, fullApplication)
+	if sfoType != "" {
+		meta.PackageType = sfoType
+		meta.PackageTypeSource = "param"
+	}
 	if meta.ContentID == "" && meta.TitleID == "" && meta.Title == "" {
 		return Metadata{}, errors.New("package metadata not found")
 	}

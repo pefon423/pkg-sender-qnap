@@ -72,8 +72,8 @@ func NewWithRootsAndTitleAliases(roots []string, aliases TitleAliases) (*Store, 
 	}, nil
 }
 
-// rootAccessTimeout bounds how long a single root's existence check (or, in
-// Scan, a single root's directory walk) may take. Without it, an
+// rootAccessTimeout bounds how long a single root's existence check may take,
+// and how long a root's scan may make no progress. Without it, an
 // unreachable or newly-unresponsive network path (a UNC share, a mounted
 // remote volume) can block server startup or a rescan indefinitely, since
 // neither os.Stat nor filepath.WalkDir accept a deadline.
@@ -207,29 +207,53 @@ func scanRootWithTimeout(rootIndex int, root string, rootCount int, aliases Titl
 		err      error
 	}
 	resultCh := make(chan result, 1)
+	progress := make(chan struct{}, 1)
+	tick := func() {
+		select {
+		case progress <- struct{}{}:
+		default:
+		}
+	}
 	go func() {
 		localNext := make(map[string]entry)
 		localPackages := make([]Package, 0)
-		err := scanRoot(rootIndex, root, rootCount, aliases, localNext, &localPackages)
+		err := scanRoot(rootIndex, root, rootCount, aliases, localNext, &localPackages, tick)
 		resultCh <- result{next: localNext, packages: localPackages, err: err}
 	}()
-	select {
-	case r := <-resultCh:
-		if r.err != nil {
-			return r.err
+
+	// timeout is how long the scan may go without any progress, not its total
+	// duration: reading the headers of dozens of packages over a network share
+	// legitimately takes longer than a hung share is allowed to stay silent.
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case r := <-resultCh:
+			if r.err != nil {
+				return r.err
+			}
+			for id, e := range r.next {
+				next[id] = e
+			}
+			*packages = append(*packages, r.packages...)
+			return nil
+		case <-progress:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(timeout)
+		case <-timer.C:
+			return nil
 		}
-		for id, e := range r.next {
-			next[id] = e
-		}
-		*packages = append(*packages, r.packages...)
-		return nil
-	case <-time.After(timeout):
-		return nil
 	}
 }
 
-func scanRoot(rootIndex int, root string, rootCount int, aliases TitleAliases, next map[string]entry, packages *[]Package) error {
+func scanRoot(rootIndex int, root string, rootCount int, aliases TitleAliases, next map[string]entry, packages *[]Package, tick func()) error {
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		tick()
 		if walkErr != nil {
 			// Keep one unreadable subtree from invalidating the whole library.
 			if path == root {
@@ -266,6 +290,7 @@ func scanRoot(rootIndex int, root string, rootCount int, aliases TitleAliases, n
 		}
 		id := packageID(idInput)
 		meta, metaErr := pkgmeta.ReadFile(path)
+		tick()
 		if metaErr == nil {
 			aliases.apply(&meta)
 		}
