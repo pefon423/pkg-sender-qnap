@@ -19,3 +19,6 @@ PkgSender-Setup-*.exe
 nas/windows/*.exe
 nas/windows/*.exe~
 nas/windows/data/
+
+# disassembly output of third-party binaries
+*.dis.txt

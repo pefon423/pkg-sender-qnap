@@ -18,6 +18,9 @@ const (
 	maxEntries    = 0x10000
 	maxParamSize  = 2 * 1024 * 1024
 	maxIconSize   = 8 * 1024 * 1024
+
+	// CNT header +0x74: content type of a complete application/game package.
+	contentTypeApplication = 0x20
 )
 
 type Metadata struct {
@@ -108,7 +111,11 @@ func Read(r io.ReaderAt, size int64, filename string) (Metadata, error) {
 		hasReadableEntry(entries, 0x0408) ||
 		hasReadableEntry(entries, 0x1008)
 
-	classify(&meta, filename, patchByStructure)
+	// Header content type 0x20 = a complete application. A merged "final" package (base + update) keeps targetContentVersion in its
+	// param.json, but it is the whole game, not an update: only the patch-specific entries make it a patch.
+	fullApplication := binary.BigEndian.Uint32(cnt.header[0x74:0x78]) == contentTypeApplication
+
+	classify(&meta, filename, patchByStructure, fullApplication)
 	if meta.ContentID == "" && meta.TitleID == "" && meta.Title == "" {
 		return Metadata{}, errors.New("package metadata not found")
 	}
@@ -357,9 +364,9 @@ func jsonString(root map[string]json.RawMessage, key string) string {
 	return strings.TrimSpace(value)
 }
 
-func classify(meta *Metadata, filename string, patchByStructure bool) {
+func classify(meta *Metadata, filename string, patchByStructure, fullApplication bool) {
 	switch {
-	case patchByStructure || meta.TargetVersion != "":
+	case patchByStructure || (meta.TargetVersion != "" && !fullApplication):
 		meta.PackageType = "patch"
 		meta.PackageTypeSource = "structure"
 	case looksLikeDLC(meta.Title, meta.ContentID, filename):

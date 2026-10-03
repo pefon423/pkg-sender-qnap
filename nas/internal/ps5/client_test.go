@@ -10,6 +10,43 @@ import (
 	"time"
 )
 
+func TestSpaceParsesReceiverReply(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/space" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"free":514284650496,"total":673863368704}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewWithBaseURL(srv.URL, &http.Client{Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp, err := client.Space(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sp.Free != 514284650496 || sp.Total != 673863368704 {
+		t.Fatalf("space=%+v", sp)
+	}
+}
+
+func TestSpaceRejectsUnusableReply(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"free":-1,"total":-1}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewWithBaseURL(srv.URL, &http.Client{Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Space(context.Background()); err == nil {
+		t.Fatal("want error for free=-1")
+	}
+}
+
 func TestInstallUsesReceiverCompatibleEncodedURL(t *testing.T) {
 	var got installRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

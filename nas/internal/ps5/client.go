@@ -125,6 +125,96 @@ func (c *DynamicClient) Install(ctx context.Context, packageURL, name string) (s
 	return client.Install(ctx, packageURL, name)
 }
 
+// Space is the receiver's /api/space reply, in bytes.
+type Space struct {
+	Free  int64 `json:"free"`
+	Total int64 `json:"total"`
+}
+
+func (c *DynamicClient) Space(ctx context.Context) (Space, error) {
+	c.mu.RLock()
+	ip, port, timeout := c.ip, c.port, c.timeout
+	c.mu.RUnlock()
+	if strings.TrimSpace(ip) == "" {
+		return Space{}, errors.New("PS5 IP is not configured")
+	}
+	client, err := New(ip, port, timeout)
+	if err != nil {
+		return Space{}, err
+	}
+	return client.Space(ctx)
+}
+
+func (c *Client) Space(ctx context.Context) (Space, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/space", nil)
+	if err != nil {
+		return Space{}, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return Space{}, fmt.Errorf("PS5 space request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
+	if err != nil {
+		return Space{}, fmt.Errorf("read PS5 space reply: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return Space{}, fmt.Errorf("PS5 receiver returned HTTP %d for /api/space", resp.StatusCode)
+	}
+	var sp Space
+	if err := json.Unmarshal(body, &sp); err != nil {
+		return Space{}, fmt.Errorf("invalid PS5 space reply: %w", err)
+	}
+	if sp.Free < 0 || sp.Total <= 0 {
+		return Space{}, errors.New("PS5 receiver reported no usable space information")
+	}
+	return sp, nil
+}
+
+// ErrInstalledUnsupported means the receiver answered, but not with the
+// /api/installed JSON, i.e. it predates build 20261003-03.
+var ErrInstalledUnsupported = errors.New("PS5 receiver does not support installed-title queries")
+
+func (c *DynamicClient) Installed(ctx context.Context, titleID string) (bool, error) {
+	c.mu.RLock()
+	ip, port, timeout := c.ip, c.port, c.timeout
+	c.mu.RUnlock()
+	if strings.TrimSpace(ip) == "" {
+		return false, errors.New("PS5 IP is not configured")
+	}
+	client, err := New(ip, port, timeout)
+	if err != nil {
+		return false, err
+	}
+	return client.Installed(ctx, titleID)
+}
+
+// Installed asks the receiver whether titleID (e.g. PPSA32236) is installed on
+// the console.
+func (c *Client) Installed(ctx context.Context, titleID string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/installed?id="+url.QueryEscape(titleID), nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("PS5 installed request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
+	if err != nil {
+		return false, fmt.Errorf("read PS5 installed reply: %w", err)
+	}
+	var reply struct {
+		Installed *bool `json:"installed"`
+	}
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &reply) != nil || reply.Installed == nil {
+		return false, ErrInstalledUnsupported
+	}
+	return *reply.Installed, nil
+}
+
 func (c *Client) Install(ctx context.Context, packageURL, name string) (string, error) {
 	if strings.TrimSpace(packageURL) == "" {
 		return "", errors.New("package URL is required")

@@ -29,6 +29,12 @@ type Installer interface {
 	Install(ctx context.Context, packageURL, name string) (string, error)
 }
 
+// SpaceChecker is optionally implemented by installers that can ask the PS5
+// receiver how much storage is free.
+type SpaceChecker interface {
+	Space(ctx context.Context) (ps5.Space, error)
+}
+
 type DiscoveryProvider interface {
 	Snapshot() discovery.Snapshot
 }
@@ -47,6 +53,7 @@ type ConfiguredDiscoveryProvider interface {
 type Server struct {
 	store            *pkgstore.Store
 	installer        Installer
+	installed        installedCache
 	discovery        DiscoveryProvider
 	history          *history.Store
 	configFile       string
@@ -166,6 +173,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/settings/ps5", s.handlePS5Settings)
 	s.mux.HandleFunc("/api/settings/libraries", s.handleLibrarySettings)
 	s.mux.HandleFunc("/api/discovery", s.handleDiscovery)
+	s.mux.HandleFunc("/api/space", s.handleSpace)
+	s.mux.HandleFunc("/api/installed", s.handleInstalled)
 	s.mux.HandleFunc("/api/rescan", s.handleRescan)
 	s.mux.HandleFunc("/api/install/", s.handleInstall)
 	s.mux.HandleFunc("/api/retry/", s.handleRetry)
@@ -202,6 +211,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			"ps5Settings":       "POST /api/settings/ps5",
 			"librarySettings":   "POST /api/settings/libraries",
 			"discovery":         "GET /api/discovery",
+			"installed":         "GET /api/installed",
 			"rescan":            "POST /api/rescan",
 			"install":           "POST /api/install/{id}",
 			"retry":             "POST /api/retry/{historyId}",
@@ -475,6 +485,49 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		snapshot.Consoles = []discovery.Console{}
 	}
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+// checkSpace refuses an install only when the receiver positively reports less
+// free space than the package needs. An unavailable or unsupported space query
+// never blocks an install.
+func (s *Server) checkSpace(need int64) error {
+	checker, ok := s.installer.(SpaceChecker)
+	if !ok || need <= 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sp, err := checker.Space(ctx)
+	if err != nil {
+		s.logger.Printf("PS5 space check skipped: %v", err)
+		return nil
+	}
+	if need > sp.Free {
+		return fmt.Errorf("not enough PS5 storage: need %.2f GiB, free %.2f GiB", gib(need), gib(sp.Free))
+	}
+	return nil
+}
+
+func gib(n int64) float64 { return float64(n) / (1 << 30) }
+
+func (s *Server) handleSpace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w, "GET, HEAD")
+		return
+	}
+	checker, ok := s.installer.(SpaceChecker)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "PS5 space query is not supported")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	sp, err := checker.Space(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sp)
 }
 
 func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request) {
@@ -931,6 +984,16 @@ func (s *Server) drainQueue() {
 				return
 			}
 			s.logger.Printf("install queue skipped missing package: history=%s package=%s", record.ID, record.PackageID)
+			continue
+		}
+
+		if spaceErr := s.checkSpace(pkg.Size); spaceErr != nil {
+			s.transfers.MarkError(pkg.ID, spaceErr)
+			if _, _, err := s.history.MarkControlError(record.ID, spaceErr); err != nil {
+				s.logger.Printf("persist space error for history=%s failed: %v", record.ID, err)
+				return
+			}
+			s.logger.Printf("install queue refused: history=%s file=%s error=%v", record.ID, pkg.RelativePath, spaceErr)
 			continue
 		}
 

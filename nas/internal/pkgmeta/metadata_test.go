@@ -125,6 +125,54 @@ func TestReadPatchByStructure(t *testing.T) {
 	}
 }
 
+// A merged base+update "final" package is a whole game (header content type 0x20) even though param.json still names a
+// targetContentVersion; only the patch-specific entries make a 0x20 package a patch.
+func TestReadFullApplicationWithTargetVersionIsGame(t *testing.T) {
+	param := []byte(`{
+		"titleId":"PPSA03671",
+		"contentVersion":"01.001.006",
+		"targetContentVersion":"01.001.005",
+		"applicationCategoryType":0,
+		"localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Merged Game"}}
+	}`)
+	build := func(extra ...fixtureEntry) []byte {
+		data := buildFixture(t, false, "UP9000-PPSA03671_00-MARVELSWOLVERINE", append([]fixtureEntry{{id: 0x2000, data: param}}, extra...))
+		binary.BigEndian.PutUint32(data[0x74:0x78], contentTypeApplication)
+		return data
+	}
+
+	merged := build()
+	meta, err := Read(bytes.NewReader(merged), int64(len(merged)), "PPSA03671.final.pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.PackageType != "game" || meta.TargetVersion != "01.001.005" {
+		t.Fatalf("merged full package should be a game: %+v", meta)
+	}
+
+	update := build(fixtureEntry{id: 0x0407, data: []byte{1}})
+	meta, err = Read(bytes.NewReader(update), int64(len(update)), "Update.pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.PackageType != "patch" {
+		t.Fatalf("package with patch entries must stay a patch: %+v", meta)
+	}
+}
+
+// Without a content type in the header (older fixtures, unknown packages) targetContentVersion alone still means patch.
+func TestReadTargetVersionWithoutContentTypeIsPatch(t *testing.T) {
+	param := []byte(`{"titleId":"PPSA54322","contentVersion":"02.000.001","targetContentVersion":"02.000.000"}`)
+	data := buildFixture(t, false, "UP0001-PPSA54322_00-PATCHGAME0000002", []fixtureEntry{{id: 0x2000, data: param}})
+	meta, err := Read(bytes.NewReader(data), int64(len(data)), "x.pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.PackageType != "patch" {
+		t.Fatalf("expected patch: %+v", meta)
+	}
+}
+
 func TestReadDLCHeuristicWithoutParamJSON(t *testing.T) {
 	data := buildFixture(t, false, "UP0001-PPSA22222_00-SOMECONTENT00001", []fixtureEntry{
 		{id: 0x1200, data: []byte("not-an-icon")},
