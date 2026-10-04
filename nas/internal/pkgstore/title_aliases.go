@@ -282,7 +282,7 @@ func (a TitleAliases) apply(meta *pkgmeta.Metadata) {
 		previous := strings.TrimSpace(meta.DisplayTitle)
 		meta.DisplayTitle = english
 		meta.SecondaryTitle = ""
-		if secondary := firstAliasTitle(alias); secondary != "" && !strings.EqualFold(secondary, english) {
+		if secondary := firstAliasTitle(alias); secondary != "" && !pkgmeta.TitleCoveredBy(secondary, english) {
 			meta.SecondaryTitle = secondary
 		} else if previous != "" {
 			meta.SecondaryTitle = previous
@@ -294,7 +294,7 @@ func (a TitleAliases) apply(meta *pkgmeta.Metadata) {
 		return
 	}
 	secondary := firstAliasTitle(alias)
-	if secondary != "" && !strings.EqualFold(strings.TrimSpace(secondary), strings.TrimSpace(meta.DisplayTitle)) {
+	if secondary != "" && !pkgmeta.TitleCoveredBy(secondary, meta.DisplayTitle) {
 		meta.SecondaryTitle = secondary
 	}
 }

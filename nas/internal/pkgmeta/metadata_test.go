@@ -304,3 +304,38 @@ func TestReadAdditionalContentTypeIsDLC(t *testing.T) {
 		}
 	}
 }
+
+// A repack that already writes "English | 中文" into the English title must not get the Chinese name again as a second line.
+func TestSelectDisplayTitlesSkipsSecondaryAlreadyInDisplayTitle(t *testing.T) {
+	meta := Metadata{LocalizedTitles: map[string]string{
+		"en-US":   "Marvel's Wolverine | 漫威金鋼狼",
+		"zh-Hant": "漫威金鋼狼",
+		"zh-Hans": "漫威金刚狼",
+	}}
+	selectDisplayTitles(&meta)
+	if meta.DisplayTitle != "Marvel's Wolverine | 漫威金鋼狼" || meta.SecondaryTitle != "" {
+		t.Fatalf("display=%q secondary=%q, want no secondary", meta.DisplayTitle, meta.SecondaryTitle)
+	}
+
+	plain := Metadata{LocalizedTitles: map[string]string{"en-US": "Marvel's Wolverine", "zh-Hant": "漫威金鋼狼"}}
+	selectDisplayTitles(&plain)
+	if plain.SecondaryTitle != "漫威金鋼狼" {
+		t.Fatalf("a Chinese title that is not in the English one must stay: %q", plain.SecondaryTitle)
+	}
+}
+
+func TestTitleCoveredBy(t *testing.T) {
+	for _, tc := range []struct {
+		candidate, display string
+		want               bool
+	}{
+		{"漫威金鋼狼", "Marvel's Wolverine | 漫威金鋼狼", true},
+		{"Same", "same", true},
+		{"漫威金鋼狼", "Marvel's Wolverine", false},
+		{"", "anything", false},
+	} {
+		if got := TitleCoveredBy(tc.candidate, tc.display); got != tc.want {
+			t.Fatalf("TitleCoveredBy(%q, %q) = %v, want %v", tc.candidate, tc.display, got, tc.want)
+		}
+	}
+}

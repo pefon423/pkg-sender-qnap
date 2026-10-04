@@ -327,9 +327,9 @@ func selectDisplayTitles(meta *Metadata) {
 		meta.DisplayTitle = chinese
 	}
 
-	if chinese != "" && !sameTitle(chinese, meta.DisplayTitle) {
+	if chinese != "" && !TitleCoveredBy(chinese, meta.DisplayTitle) {
 		meta.SecondaryTitle = chinese
-	} else if japanese != "" && !sameTitle(japanese, meta.DisplayTitle) {
+	} else if japanese != "" && !TitleCoveredBy(japanese, meta.DisplayTitle) {
 		meta.SecondaryTitle = japanese
 	}
 }
@@ -359,6 +359,15 @@ func firstLocalizedTitle(titles map[string]string, preferred ...string) string {
 		}
 	}
 	return ""
+}
+
+// TitleCoveredBy reports whether candidate adds nothing to display: it is the
+// same text, or already appears inside it. A repack that puts the Chinese name
+// into the English title field gives "English | 中文", which must not get the
+// same Chinese name again as a second line.
+func TitleCoveredBy(candidate, display string) bool {
+	candidate, display = strings.TrimSpace(candidate), strings.TrimSpace(display)
+	return candidate != "" && strings.Contains(strings.ToLower(display), strings.ToLower(candidate))
 }
 
 func sameTitle(left, right string) bool {
