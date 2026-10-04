@@ -2,6 +2,7 @@ package pkgmeta
 
 import (
 	"encoding/binary"
+	"strconv"
 	"strings"
 )
 
@@ -56,6 +57,33 @@ func parseSFO(data []byte) (map[string]string, bool) {
 	return values, len(values) > 0
 }
 
+// compareVersions compares dotted numeric versions such as "01.05" and
+// "01.009.001"; it returns <0, 0 or >0. Non-numeric parts compare as text.
+func compareVersions(a, b string) int {
+	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(pa) || i < len(pb); i++ {
+		var x, y string
+		if i < len(pa) {
+			x = pa[i]
+		}
+		if i < len(pb) {
+			y = pb[i]
+		}
+		nx, errX := strconv.Atoi(x)
+		ny, errY := strconv.Atoi(y)
+		switch {
+		case errX == nil && errY == nil && nx != ny:
+			if nx < ny {
+				return -1
+			}
+			return 1
+		case (errX != nil || errY != nil) && x != y:
+			return strings.Compare(x, y)
+		}
+	}
+	return 0
+}
+
 // applySFO fills metadata from a PS4 PARAM.SFO and returns the package type its
 // CATEGORY implies ("" when it implies none).
 func applySFO(meta *Metadata, sfo map[string]string) (packageType string) {
@@ -68,9 +96,13 @@ func applySFO(meta *Metadata, sfo map[string]string) (packageType string) {
 	if v := sfo["TITLE"]; v != "" {
 		meta.Title = v
 	}
-	// VERSION is the package's content version (the V0122 in file names).
-	meta.Version = sfo["VERSION"]
-	meta.MasterVersion = sfo["APP_VER"]
+	// A base game carries its real version in VERSION (the V0122 in file names)
+	// with APP_VER left at 01.00, while a patch is the other way round
+	// (APP_VER 01.05, VERSION 01.00). Whichever is higher is the real version.
+	meta.Version, meta.MasterVersion = sfo["VERSION"], sfo["APP_VER"]
+	if compareVersions(meta.Version, meta.MasterVersion) < 0 {
+		meta.Version, meta.MasterVersion = meta.MasterVersion, meta.Version
+	}
 	if meta.TitleID == "" {
 		meta.TitleID = titleIDFromContentID(meta.ContentID)
 	}

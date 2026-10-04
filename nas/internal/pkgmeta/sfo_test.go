@@ -43,8 +43,8 @@ func TestApplySFO(t *testing.T) {
 	if got := applySFO(&meta, sfo); got != "game" {
 		t.Fatalf("package type=%q, want game", got)
 	}
-	if meta.Title != "Like a Dragon Gaiden" || meta.TitleID != "CUSA43228" || meta.Version != "01.00" ||
-		meta.MasterVersion != "01.22" || meta.Platform != "PS4" {
+	if meta.Title != "Like a Dragon Gaiden" || meta.TitleID != "CUSA43228" || meta.Version != "01.22" ||
+		meta.MasterVersion != "01.00" || meta.Platform != "PS4" {
 		t.Fatalf("unexpected metadata: %+v", meta)
 	}
 
@@ -77,5 +77,25 @@ func TestReadPrefersSFOWhenJSONHasNoTitle(t *testing.T) {
 	}
 	if got := applySFO(&meta, parsed); got != "patch" || meta.Title != "Some Patch" || meta.Version != "01.05" {
 		t.Fatalf("type=%q meta=%+v", got, meta)
+	}
+}
+
+func TestSFOVersionIsTheHigherOfAppVerAndVersion(t *testing.T) {
+	for name, tc := range map[string]struct{ appVer, version, want string }{
+		"patch":      {"01.05", "01.00", "01.05"},
+		"base game":  {"01.00", "01.22", "01.22"},
+		"equal":      {"01.00", "01.00", "01.00"},
+		"minor sort": {"01.9", "01.10", "01.10"},
+		"only one":   {"", "01.03", "01.03"},
+	} {
+		sfo, ok := parseSFO(buildSFO([][2]string{{"APP_VER", tc.appVer}, {"VERSION", tc.version}, {"TITLE_ID", "CUSA00001"}}))
+		if !ok {
+			t.Fatalf("%s: parseSFO failed", name)
+		}
+		meta := Metadata{}
+		applySFO(&meta, sfo)
+		if meta.Version != tc.want {
+			t.Fatalf("%s: version %q, want %q (master %q)", name, meta.Version, tc.want, meta.MasterVersion)
+		}
 	}
 }
