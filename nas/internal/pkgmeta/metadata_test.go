@@ -339,3 +339,36 @@ func TestTitleCoveredBy(t *testing.T) {
 		}
 	}
 }
+
+// A package that declares itself a full application but is named as a patch is treated as a patch; a DLC never is.
+func TestReadPatchFilenameOverridesGame(t *testing.T) {
+	param := []byte(`{"titleId":"PPSA10595","contentVersion":"01.009.001","applicationCategoryType":0,"localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"TEKKEN 8"}}}`)
+	build := func(contentType uint32) []byte {
+		data := buildFixture(t, false, "UP0700-PPSA10595_00-TEKKEN8000000000", []fixtureEntry{{id: 0x2000, data: param}})
+		binary.BigEndian.PutUint32(data[0x74:0x78], contentType)
+		return data
+	}
+	for name, tc := range map[string]struct {
+		file        string
+		contentType uint32
+		wantType    string
+		wantSource  string
+	}{
+		"chinese patch word":   {"UP0700-PPSA10595_00-TEKKEN8000000000 補丁.pkg", contentTypeApplication, "patch", "filename"},
+		"simplified":           {"TEKKEN8 补丁.pkg", contentTypeApplication, "patch", "filename"},
+		"english patch":        {"Tekken 8 Patch 1.09.pkg", contentTypeApplication, "patch", "filename"},
+		"update token":         {"Tekken_8-Update.pkg", contentTypeApplication, "patch", "filename"},
+		"plain game name":      {"UP0700-PPSA10595_00-TEKKEN8000000000-A0109-V0109.pkg", contentTypeApplication, "game", "param"},
+		"not a whole word":     {"Dispatch Simulator Updated Edition.pkg", contentTypeApplication, "game", "param"},
+		"dlc is never patched": {"Costume Patch Pack.pkg", contentTypePS5AddOn, "dlc", "structure"},
+	} {
+		data := build(tc.contentType)
+		meta, err := Read(bytes.NewReader(data), int64(len(data)), tc.file)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if meta.PackageType != tc.wantType || meta.PackageTypeSource != tc.wantSource {
+			t.Fatalf("%s: got %s/%s, want %s/%s", name, meta.PackageType, meta.PackageTypeSource, tc.wantType, tc.wantSource)
+		}
+	}
+}

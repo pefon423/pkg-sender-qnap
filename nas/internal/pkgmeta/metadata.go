@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -138,6 +139,16 @@ func Read(r io.ReaderAt, size int64, filename string) (Metadata, error) {
 	if sfoType != "" {
 		meta.PackageType = sfoType
 		meta.PackageTypeSource = "param"
+	}
+	// Some repacks ship an update as a package that declares itself a full
+	// application, with nothing patch-like inside. The file name is then the only
+	// hint, so it may turn a game (never a DLC) into a patch.
+	if looksLikePatchName(filename) {
+		switch meta.PackageType {
+		case "game", "app", "unknown":
+			meta.PackageType = "patch"
+			meta.PackageTypeSource = "filename"
+		}
 	}
 	if meta.ContentID == "" && meta.TitleID == "" && meta.Title == "" {
 		return Metadata{}, errors.New("package metadata not found")
@@ -417,6 +428,19 @@ func classify(meta *Metadata, filename string, patchByStructure, fullApplication
 		meta.PackageType = "unknown"
 		meta.PackageTypeSource = "none"
 	}
+}
+
+// patchNameWord matches "patch", "update" or "upd" as a whole word, so names such
+// as "Updated Edition" or "Dispatch" do not count.
+var patchNameWord = regexp.MustCompile(`(?i)(^|[^a-z0-9])(patch|update|upd)([^a-z0-9]|$)`)
+
+func looksLikePatchName(filename string) bool {
+	for _, marker := range []string{"補丁", "补丁", "補釘", "补钉"} {
+		if strings.Contains(filename, marker) {
+			return true
+		}
+	}
+	return patchNameWord.MatchString(filename)
 }
 
 func looksLikeDLC(title, contentID, filename string) bool {
