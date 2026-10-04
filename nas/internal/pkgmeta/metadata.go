@@ -21,6 +21,10 @@ const (
 
 	// CNT header +0x74: content type of a complete application/game package.
 	contentTypeApplication = 0x20
+
+	// CNT header +0x74 for additional content (DLC): PS5 packages use 0x21, PS4 0x1b.
+	contentTypePS5AddOn = 0x21
+	contentTypePS4AddOn = 0x1b
 )
 
 type Metadata struct {
@@ -127,9 +131,10 @@ func Read(r io.ReaderAt, size int64, filename string) (Metadata, error) {
 
 	// Header content type 0x20 = a complete application. A merged "final" package (base + update) keeps targetContentVersion in its
 	// param.json, but it is the whole game, not an update: only the patch-specific entries make it a patch.
-	fullApplication := binary.BigEndian.Uint32(cnt.header[0x74:0x78]) == contentTypeApplication
+	contentType := binary.BigEndian.Uint32(cnt.header[0x74:0x78])
+	fullApplication := contentType == contentTypeApplication
 
-	classify(&meta, filename, patchByStructure, fullApplication)
+	classify(&meta, filename, patchByStructure, fullApplication, contentType)
 	if sfoType != "" {
 		meta.PackageType = sfoType
 		meta.PackageTypeSource = "param"
@@ -382,10 +387,13 @@ func jsonString(root map[string]json.RawMessage, key string) string {
 	return strings.TrimSpace(value)
 }
 
-func classify(meta *Metadata, filename string, patchByStructure, fullApplication bool) {
+func classify(meta *Metadata, filename string, patchByStructure, fullApplication bool, contentType uint32) {
 	switch {
 	case patchByStructure || (meta.TargetVersion != "" && !fullApplication):
 		meta.PackageType = "patch"
+		meta.PackageTypeSource = "structure"
+	case contentType == contentTypePS5AddOn || contentType == contentTypePS4AddOn:
+		meta.PackageType = "dlc"
 		meta.PackageTypeSource = "structure"
 	case looksLikeDLC(meta.Title, meta.ContentID, filename):
 		meta.PackageType = "dlc"

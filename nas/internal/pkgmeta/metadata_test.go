@@ -276,3 +276,31 @@ func buildFixture(t *testing.T, fih bool, contentID string, entries []fixtureEnt
 	}
 	return out
 }
+
+// The header content type marks additional content, so a DLC needs no "DLC" keyword in its name or title.
+func TestReadAdditionalContentTypeIsDLC(t *testing.T) {
+	param := []byte(`{"titleId":"PPSA01234","contentVersion":"01.000.000","localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Eddy Gordo"}}}`)
+	build := func(contentType uint32) []byte {
+		data := buildFixture(t, false, "UP0001-PPSA01234_00-EDDYGORDO0000000", []fixtureEntry{{id: 0x2000, data: param}})
+		binary.BigEndian.PutUint32(data[0x74:0x78], contentType)
+		return data
+	}
+	for contentType, want := range map[uint32]string{
+		contentTypePS5AddOn:    "dlc",
+		contentTypePS4AddOn:    "dlc",
+		contentTypeApplication: "unknown", // no applicationCategoryType in this fixture
+		0x1a:                   "unknown",
+	} {
+		data := build(contentType)
+		meta, err := Read(bytes.NewReader(data), int64(len(data)), "Eddy Gordo.pkg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if meta.PackageType != want {
+			t.Fatalf("content type 0x%x: package type %q, want %q", contentType, meta.PackageType, want)
+		}
+		if want == "dlc" && meta.PackageTypeSource != "structure" {
+			t.Fatalf("content type 0x%x: source %q, want structure", contentType, meta.PackageTypeSource)
+		}
+	}
+}
